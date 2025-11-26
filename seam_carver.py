@@ -8,91 +8,102 @@ matplotlib.use("TkAgg")
 
 class SeamCarver:
     def __init__(self, input_img, specifications) -> None:
-        self.img_h, self.img_w = len(input_img), len(input_img[0])
+        self.input_img = input_img
         self.specifications = specifications
         self.reqd_h = specifications["height"]
         self.reqd_w = specifications["width"]
-        self.input_img = input_img
+        self.output_img = input_img.copy()
+        self.img_h, self.img_w = input_img.shape[:2]
 
     def validate(self):
         print(f"Input Dimensions: {self.img_w} x {self.img_h}")
         print(f"Required Dimensions: {self.reqd_w} x {self.reqd_h}")
+        return self.reqd_h <= self.img_h and self.reqd_w <= self.img_w
 
-        if self.reqd_h > self.img_h or self.reqd_w > self.img_w:
-            return False
-        return True
-
-    def vertical_seam_carving(self):
-        img = cv.cvtColor(self.input_img, cv.COLOR_BGR2GRAY).astype(np.float64)
-        num_seams = self.img_w - self.reqd_w
-        self.output_img = self.input_img.copy()
+    def seam_carving_vertical(self, img, target_width):
+        """Carve vertical seams from a given image array."""
+        img_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY).astype(np.float64)
+        num_seams = img.shape[1] - target_width
+        carved_img = img.copy()
 
         for i in range(num_seams):
-            H = self.img_h
-            W = self.img_w - i
+            print(f"Pass {i+1}/{num_seams}")
+            H, W = img_gray.shape
+            gx = cv.Sobel(img_gray, cv.CV_64F, 1, 0, ksize=3)
+            gy = cv.Sobel(img_gray, cv.CV_64F, 0, 1, ksize=3)
+            energy = (np.abs(gx) + np.abs(gy)).astype(np.float64)
 
-            print("Pass", i + 1)
-            gx = cv.Sobel(img, cv.CV_64F, 1, 0, ksize=3)  # d/dx
-            gy = cv.Sobel(img, cv.CV_64F, 0, 1, ksize=3)  # d/dy
-
-            energy_map = (np.abs(gx) + np.abs(gy)).astype(np.float64)
-            dp = energy_map.copy()
-
-            # Form DP table
+            # DP table
+            dp = energy.copy()
             for row in range(1, H):
                 for col in range(W):
                     if col == 0:
                         dp[row, col] += min(dp[row-1, col], dp[row-1, col+1])
-                    elif col == W - 1:
+                    elif col == W-1:
                         dp[row, col] += min(dp[row-1, col-1], dp[row-1, col])
                     else:
-                        dp[row, col] += min(dp[row-1, col-1],
-                                            dp[row-1, col], dp[row-1, col+1])
+                        dp[row, col] += min(dp[row-1, col-1], dp[row-1, col], dp[row-1, col+1])
 
-            seam = np.zeros(img.shape[0], dtype=np.int32)
+            # Backtrack seam
+            seam = np.zeros(H, dtype=np.int32)
             seam[-1] = np.argmin(dp[-1])
-
-            for row in range(H - 2, -1, -1):
-                prev = seam[row + 1]  # start from the bottom seam position
+            for row in range(H-2, -1, -1):
+                prev = seam[row+1]
                 if prev == 0:
-                    choices = [dp[row, prev], dp[row, prev + 1]]
+                    choices = [dp[row, prev], dp[row, prev+1]]
                     seam[row] = prev + np.argmin(choices)
-                elif prev == W - 1:
-                    choices = [dp[row, prev - 1], dp[row, prev]]
+                elif prev == W-1:
+                    choices = [dp[row, prev-1], dp[row, prev]]
                     seam[row] = prev - 1 + np.argmin(choices)
                 else:
-                    choices = [dp[row, prev - 1],
-                               dp[row, prev], dp[row, prev + 1]]
+                    choices = [dp[row, prev-1], dp[row, prev], dp[row, prev+1]]
                     seam[row] = prev - 1 + np.argmin(choices)
 
-            img = np.array([np.delete(img[row], seam[row])
-                           for row in range(H)])
-            self.output_img = np.array(
-                [np.delete(self.output_img[row], seam[row], axis=0) for row in range(H)])
+            # Remove seam
+            img_gray = np.array([np.delete(img_gray[row], seam[row]) for row in range(H)])
+            carved_img = np.array([np.delete(carved_img[row], seam[row], axis=0) for row in range(H)])
 
+        return carved_img
+
+    def seam_carving(self):
+        self.output_img = self.seam_carving_vertical(self.output_img, self.reqd_w)
+        rotated = np.rot90(self.output_img, k=-1)
+        carved_rotated = self.seam_carving_vertical(rotated, self.reqd_h)
+        self.output_img = np.rot90(carved_rotated, k=1)
+
+    def show_images(self):
+        plt.figure(figsize=(12, 6))
+        plt.subplot(1, 2, 1)
+        plt.imshow(cv.cvtColor(self.input_img, cv.COLOR_BGR2RGB))
+        plt.title("Original")
+        plt.axis("off")
+
+        plt.subplot(1, 2, 2)
         plt.imshow(cv.cvtColor(self.output_img, cv.COLOR_BGR2RGB))
-        plt.axis('off')
-        plt.savefig("output.png", bbox_inches='tight', pad_inches=0)
+        plt.title("Seam Carved")
+        plt.axis("off")
         plt.show()
 
-    def run_horizontal_seam_carving(self):
-        pass
+    def save_output(self, path="output.png"):
+        cv.imwrite(path, self.output_img)
 
 
 def main():
-    input_img = cv.imread("data/dog_image.jpg")
-
+    input_img = cv.imread("data/human.png")
     with open("data/specifications.json") as f:
         specifications = json.load(f)
 
-    obj = SeamCarver(input_img, specifications)
-
-    if not obj.validate():
+    carver = SeamCarver(input_img, specifications)
+    if not carver.validate():
         print("Required dimensions are larger than image dimensions.")
         return
 
-    obj.vertical_seam_carving()
-    obj.run_horizontal_seam_carving()
+    # Vertical carving
+    carver.seam_carving()
+
+    carver.show_images()
+    carver.save_output("output_carved.png")
+
 
 if __name__ == '__main__':
     main()
